@@ -1,0 +1,343 @@
+// MK Creative — Prisma Schema (PostgreSQL / Neon — hospedado na Vercel)
+// Usuários, sessões, conteúdo (blog), leads, mídia indoor, configurações,
+// analytics próprio (LGPD) e sistema.
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────── Usuários / Sessões ───────────────────────────
+
+model User {
+  id            String     @id @default(cuid())
+  name          String
+  email         String     @unique
+  passwordHash  String
+  role          String     @default("ADMIN") // ADMIN | EDITOR
+  active        Boolean    @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  sessions      Session[]
+  auditLogs     AuditLog[]
+  posts         Post[]     @relation("PostAuthor")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String // LOGIN | LOGIN_FAILED | LOGOUT | CREATE | UPDATE | DELETE | SEED
+  entity    String
+  entityId  String?
+  details   String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// ─────────────────────────── Blog / Conteúdos ───────────────────────────
+
+model Category {
+  id        String    @id @default(cuid())
+  name      String
+  slug      String    @unique
+  color     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  posts     Post[]
+}
+
+model Tag {
+  id    String    @id @default(cuid())
+  name  String
+  slug  String    @unique
+  posts PostTag[]
+}
+
+model PostTag {
+  postId String
+  tagId  String
+  post   Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  tag    Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([postId, tagId])
+}
+
+model Post {
+  id             String        @id @default(cuid())
+  title          String
+  slug           String        @unique
+  excerpt        String?
+  content        String? // HTML sanitizado
+  coverImage     String?
+  coverAlt       String?
+  status         String        @default("DRAFT") // DRAFT | SCHEDULED | PUBLISHED
+  authorId       String
+  author         User          @relation("PostAuthor", fields: [authorId], references: [id])
+  categoryId     String?
+  category       Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  tags           PostTag[]
+  publishedAt    DateTime?
+  scheduledAt    DateTime?
+  readingMinutes Int           @default(1)
+  featured       Boolean       @default(false)
+  views          Int           @default(0)
+  // SEO
+  seoTitle       String?
+  seoDescription String?
+  ogImage        String?
+  canonical      String?
+  robots         String        @default("index,follow")
+  focusKeyword   String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([status, publishedAt])
+}
+
+// ─────────────────────────── Projetos (portfólio) ───────────────────────────
+
+model Project {
+  id               String   @id @default(cuid())
+  title            String
+  slug             String   @unique
+  client           String?
+  clientAuthorized Boolean  @default(false)
+  description      String?
+  content          String?
+  category         String // GOOGLE_SEO | REDES_SOCIAIS | TRAFEGO_PAGO | CRIACAO_SITES | MIDIA_INDOOR | COMUNICACAO_VISUAL
+  coverImage       String?
+  coverAlt         String?
+  results          String?
+  featured         Boolean  @default(false)
+  order            Int      @default(0)
+  status           String   @default("PUBLISHED") // PUBLISHED | DRAFT
+  seoTitle         String?
+  seoDescription   String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+// ─────────────────────────── Mídia Indoor ───────────────────────────
+
+model City {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  lat         Float // latitude real (mapa da rede)
+  lng         Float // longitude real
+  description String?
+  status      String   @default("ACTIVE") // ACTIVE | COMING_SOON
+  order       Int      @default(0)
+  points      Point[]
+  media       IndoorMedia[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Point {
+  id        String   @id @default(cuid())
+  cityId    String
+  city      City     @relation(fields: [cityId], references: [id], onDelete: Cascade)
+  name      String
+  segment   String? // Farmácia, Academia, Sorveteria…
+  address   String?
+  screens   Int      @default(1)
+  notes     String?
+  status    String   @default("PUBLISHED") // PUBLISHED | HIDDEN
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([cityId, status])
+}
+
+model AdFormat {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  specs       String?
+  order       Int     @default(0)
+  active      Boolean @default(true)
+}
+
+model CampaignStep {
+  id          String  @id @default(cuid())
+  title       String
+  description String?
+  order       Int     @default(0)
+  active      Boolean @default(true)
+}
+
+// Galeria da rede indoor — fotos reais das telas + vídeos via link externo.
+// IMPORTANTE: vídeos NÃO são enviados por upload — devem ser hospedados em
+// plataformas externas (YouTube ou Vimeo) e o link colado no campo videoUrl.
+model IndoorMedia {
+  id                 String   @id @default(cuid())
+  kind               String   @default("PHOTO") // PHOTO | VIDEO
+  title              String   @default("")
+  caption            String?
+  venue              String? // Farmácia, Academia…
+  cityId             String?
+  city               City?    @relation(fields: [cityId], references: [id], onDelete: SetNull)
+  segment            String?
+  src                String? // URL da foto
+  videoUrl           String? // URL completa do vídeo no YouTube ou Vimeo
+  vimeoId            String? // legado (mantido por compatibilidade)
+  poster             String? // capa do vídeo (imagem)
+  duration           Int?
+  dateLabel          String?
+  authorized         Boolean  @default(true) // autorizada para divulgação
+  faceVisible        Boolean  @default(false) // rosto identificável visível
+  origin             String   @default("own") // own | stock | client
+  order              Int      @default(0)
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+// ─────────────────────────── Leads ───────────────────────────
+
+model Lead {
+  id         String      @id @default(cuid())
+  name       String
+  company    String?
+  phone      String?
+  email      String
+  service    String // GOOGLE_SEO | REDES_SOCIAIS | TRAFEGO_PAGO | CRIACAO_SITES | MIDIA_INDOOR | COMUNICACAO_VISUAL | OUTRO
+  message    String
+  city       String?
+  status     String      @default("NEW") // NEW | CONTACT | PROPOSAL | WON | LOST
+  source     String      @default("site")
+  originPath String?
+  notes      String?
+  read       Boolean     @default(false)
+  consent    Boolean     @default(true)
+  events     LeadEvent[]
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  @@index([status, createdAt])
+}
+
+model LeadEvent {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  type      String // NOTE | STATUS_CHANGE
+  content   String?
+  createdAt DateTime @default(now())
+
+  @@index([leadId])
+}
+
+// ─────────────────────────── Configurações / Sistema ───────────────────────────
+
+model Setting {
+  key       String   @id
+  value     String // JSON
+  updatedAt DateTime @updatedAt
+}
+
+model MediaAsset {
+  id        String   @id @default(cuid())
+  filename  String
+  url       String // /api/media/{id} (armazenado no banco) ou URL externa
+  data      String? // base64 do arquivo — armazenamento no PostgreSQL (compatível com Vercel, sem disco local)
+  alt       String?
+  folder    String   @default("Geral")
+  width     Int?
+  height    Int?
+  size      Int
+  mime      String
+  createdAt DateTime @default(now())
+}
+
+model Redirect {
+  id     String  @id @default(cuid())
+  from   String
+  to     String
+  code   Int     @default(301)
+  active Boolean @default(true)
+}
+
+model ConsentLog {
+  id         String   @id @default(cuid())
+  statistics Boolean  @default(false)
+  marketing  Boolean  @default(false)
+  referrer   String?
+  createdAt  DateTime @default(now())
+}
+
+model ContentTask {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  done        Boolean  @default(false)
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+}
+
+// ─────────────────────────── Analytics próprio (LGPD) ───────────────────────────
+
+model Visit {
+  id           String     @id @default(cuid())
+  visitorHash  String // hash anônimo diário: sha256(ip+ua+salt+data)
+  day          String // YYYY-MM-DD
+  referrer     String?
+  refSource    String? // direct | google | social | referral
+  device       String? // desktop | mobile | tablet
+  browser      String?
+  os           String?
+  landingPath  String?
+  pageviews    Int        @default(1)
+  lastActiveAt DateTime   @default(now())
+  createdAt    DateTime   @default(now())
+  views        PageView[]
+
+  @@unique([visitorHash, day])
+  @@index([day])
+  @@index([lastActiveAt])
+}
+
+model PageView {
+  id        String   @id @default(cuid())
+  visitId   String
+  visit     Visit    @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  path      String
+  title     String?
+  createdAt DateTime @default(now())
+
+  @@index([path, createdAt])
+  @@index([createdAt])
+}
+
+model TrackEvent {
+  id        String   @id @default(cuid())
+  type      String // whatsapp_click | cta_click | form_submit | lead_created
+  label     String?
+  path      String?
+  createdAt DateTime @default(now())
+
+  @@index([type, createdAt])
+}
